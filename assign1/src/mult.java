@@ -80,7 +80,6 @@ public class MatrixMult {
         do {
             System.out.println("\n1. Multiplication");
             System.out.println("2. Line Multiplication");
-            System.out.println("3. Block Multiplication");
             System.out.println("0. Exit");
             System.out.print("Selection?: ");
             op = scanner.nextInt();
@@ -97,11 +96,6 @@ public class MatrixMult {
                     break;
                 case 2:
                     onMultLine(lin, col);
-                    break;
-                case 3:
-                    System.out.print("Block Size? ");
-                    int blockSize = scanner.nextInt();
-                    onMultBlock(lin, col, blockSize);
                     break;
             }
 
