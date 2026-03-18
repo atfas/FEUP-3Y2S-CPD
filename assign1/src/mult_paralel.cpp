@@ -185,6 +185,129 @@ void OnMultLine(int m_ar, int m_br)
     free(phc);
 }
 
+void OnMultLineSimd(int m_ar, int m_br)
+{
+    // Setup
+    double Time1, Time2;
+    
+    char st[100];
+    double temp;
+    int i, j, k;
+
+    double *pha, *phb, *phc;
+
+    pha = (double *)malloc((m_ar * m_ar) * sizeof(double));
+    phb = (double *)malloc((m_ar * m_br) * sizeof(double));
+    phc = (double *)malloc((m_ar * m_br) * sizeof(double));
+
+    for(i = 0; i < m_ar; i++)
+        for(j = 0; j < m_ar; j++)
+            pha[i*m_ar + j] = 1.0;
+
+    for(i = 0; i < m_br; i++)
+        for(j = 0; j < m_br; j++)
+            phb[i*m_br + j] = (double)(i + 1);
+
+    for(i = 0; i < m_ar; i++)
+        for(j = 0; j < m_br; j++)
+            phc[i*m_br + j] = 0.0;
+    
+    // Perform The calculation
+    Time1 = omp_get_wtime();
+
+    #pragma omp parallel for private(temp, j, k)
+    for(i = 0; i < m_ar; i++)
+    {
+        for(k = 0; k < m_ar; k++)
+        {
+            temp = pha[i*m_ar + k];
+            #pragma omp simd
+            for(j = 0; j < m_br; j++)
+            {
+                phc[i*m_br + j] +=   temp * phb[k*m_br + j];
+            }
+        }
+    }
+
+    Time2 = omp_get_wtime();
+    snprintf(st, sizeof(st), "Time: %3.3f seconds\n",
+         (double)(Time2 - Time1));
+    cout << st;
+
+    cout << "Result matrix: " << endl;
+    for(i = 0; i < 1; i++)
+    {
+        for(j = 0; j < min(10, m_br); j++)
+            cout << phc[j] << " ";
+    }
+    cout << endl;
+
+    free(pha);
+    free(phb);
+    free(phc);
+}
+
+void OnMultLineCollapse(int m_ar, int m_br)
+{
+    // Setup
+    double Time1, Time2;
+    
+    char st[100];
+    double temp;
+    int i, j, k;
+
+    double *pha, *phb, *phc;
+
+    pha = (double *)malloc((m_ar * m_ar) * sizeof(double));
+    phb = (double *)malloc((m_ar * m_br) * sizeof(double));
+    phc = (double *)malloc((m_ar * m_br) * sizeof(double));
+
+    for(i = 0; i < m_ar; i++)
+        for(j = 0; j < m_ar; j++)
+            pha[i*m_ar + j] = 1.0;
+
+    for(i = 0; i < m_br; i++)
+        for(j = 0; j < m_br; j++)
+            phb[i*m_br + j] = (double)(i + 1);
+
+    for(i = 0; i < m_ar; i++)
+        for(j = 0; j < m_br; j++)
+            phc[i*m_br + j] = 0.0;
+    
+    // Perform The calculation
+    Time1 = omp_get_wtime();
+
+    #pragma omp parallel for  collapse(2) private(temp, j, k)
+    for(i = 0; i < m_ar; i++)
+    {
+        for(k = 0; k < m_ar; k++)
+        {
+            temp = pha[i*m_ar + k];
+            for(j = 0; j < m_br; j++)
+            {
+                phc[i*m_br + j] +=   temp * phb[k*m_br + j];
+            }
+        }
+    }
+
+    Time2 = omp_get_wtime();
+    snprintf(st, sizeof(st), "Time: %3.3f seconds\n",
+         (double)(Time2 - Time1));
+    cout << st;
+
+    cout << "Result matrix: " << endl;
+    for(i = 0; i < 1; i++)
+    {
+        for(j = 0; j < min(10, m_br); j++)
+            cout << phc[j] << " ";
+    }
+    cout << endl;
+
+    free(pha);
+    free(phb);
+    free(phc);
+}
+
 void OnMultLine2(int m_ar, int m_br)
 {
     // Setup
@@ -318,6 +441,8 @@ int main(int argc, char *argv[])
         cout << "4. Multiplication (parallel inner for)" << endl;
         cout << "2. Line Multiplication" << endl;
         cout << "5. Line Multiplication (parallel inner for)" << endl;
+        cout << "6. Line Multiplication (simd)" << endl;
+        cout << "7. Line Multiplication (collapsing)" << endl;
         cout << "3. Block Multiplication" << endl;
         cout << "0. Exit" << endl;
         cout << "Selection?: ";
@@ -339,6 +464,12 @@ int main(int argc, char *argv[])
                 break;
             case 5:
                 OnMultLine2(lin, col);
+                break;
+            case 6:
+                OnMultLineSimd(lin, col);
+                break;
+            case 7:
+                OnMultLineCollapse(lin, col);
                 break;
             case 4:
                 OnMult2(lin, col);
