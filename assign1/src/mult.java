@@ -1,6 +1,6 @@
 import java.util.Scanner;
 
-public class MatrixMult {
+public class mult {
 
     static void onMult(int mAr, int mBr) {
         double[] pha = new double[mAr * mAr];
