@@ -2,9 +2,11 @@ package server;
 
 import java.io.*;
 import java.net.*;
-import java.util.Date;
+
+import server.common.ClientHandler;
 
 public class ChatServer {
+
     public static void main(String[] args) {
         if (args.length < 1) return;
  
@@ -16,18 +18,9 @@ public class ChatServer {
  
             while (true) {
                 Socket socket = serverSocket.accept();
- 
-                InputStream input = socket.getInputStream();
-                BufferedReader reader = new BufferedReader(new InputStreamReader(input));
- 
-                String time = reader.readLine();
-
-                System.out.println("New client connected: "+ time);
- 
-                OutputStream output = socket.getOutputStream();
-                PrintWriter writer = new PrintWriter(output, true);
- 
-                writer.println(new Date().toString());
+                
+                ClientHandler handler = new ClientHandler(socket);
+                Thread.ofVirtual().start(handler);
             }
  
         } catch (IOException ex) {
