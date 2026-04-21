@@ -2,7 +2,9 @@ package server.common;
 
 import java.io.*;
 import java.net.*;
-import java.util.Date;
+
+import common.protocol.Request;
+import common.protocol.RequestType;;
 
 public class ClientHandler implements Runnable {
     private Socket socket;
@@ -14,34 +16,53 @@ public class ClientHandler implements Runnable {
     @Override
     public void run() {
         try {
-            // For demonstration, just answer the client's message with a timestamp.
-            // TODO: Remove this and implement actual Client functionality.
-            date(socket);
+            Request request = Request.getRequest(socket);
 
-            // TODO: Implement Login request
-            // TODO: Implement Registration request
-            // TODO: Implement Chat message handling
-            // TODO: Implement Logout request
-            // TODO: Implement reconnection handling
-
+            switch (request.getType()) {
+                case LOGIN:
+                    // TODO: Implement Login request
+                    notImplementedRequest(socket, RequestType.LOGIN);
+                    break;
+                case REGISTER:
+                    // TODO: Implement Registration request
+                    notImplementedRequest(socket, RequestType.REGISTER);
+                    break;
+                case CHAT_MESSAGE:
+                    // TODO: Implement Chat message handling
+                    notImplementedRequest(socket, RequestType.CHAT_MESSAGE);
+                    break;
+                case LOGOUT:
+                    // TODO: Implement Logout request
+                    notImplementedRequest(socket, RequestType.LOGOUT);
+                    break;
+                case RECONNECT:
+                    // TODO: Implement reconnection handling
+                    notImplementedRequest(socket, RequestType.RECONNECT);
+                    break;
+                case UNKNOWN:
+                    invalidRequest(socket, request.getPayload());
+                    break;
+                default:
+                    notImplementedRequest(socket, request.getType());
+                    break;
+            }
         } catch (IOException ex) {
             System.out.println("Client handler exception: " + ex.getMessage());
             ex.printStackTrace();
         }
     }
 
-    // Simple date method that reads a line from the client and responds with the current date/time.
-    private void date(Socket socket) throws IOException {
-            InputStream input = socket.getInputStream();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(input));
+    private void notImplementedRequest(Socket socket, RequestType type) throws IOException {
+        OutputStream output = socket.getOutputStream();
+        PrintWriter writer = new PrintWriter(output, true);
 
-            String time = reader.readLine();
+        writer.println("Request type " + type.name() + " not implemented yet.");
+    }
 
-            System.out.println("New client connected: " + time);
+    private void invalidRequest(Socket socket, String payload) throws IOException {
+        OutputStream output = socket.getOutputStream();
+        PrintWriter writer = new PrintWriter(output, true);
 
-            OutputStream output = socket.getOutputStream();
-            PrintWriter writer = new PrintWriter(output, true);
-
-            writer.println(new Date().toString());
+        writer.println("Invalid request: " + payload);
     }
 }
