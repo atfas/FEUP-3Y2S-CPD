@@ -4,3 +4,19 @@
 *.class
 *.iml
 .idea/
+
+# Java binaries
+*.class
+*.jar
+*.war
+*.ear
+
+# Build folders
+bin/
+build/
+out/
+target/
+
+# JVM crash logs
+hs_err_pid*
+replay_pid*
