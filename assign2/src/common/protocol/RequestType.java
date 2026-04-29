@@ -6,5 +6,8 @@ public enum RequestType {
     CHAT_MESSAGE,
     LOGOUT,
     RECONNECT,
-    UNKNOWN
+    UNKNOWN,
+    ERROR,
+    ENTER_ROOM,
+    LEAVE_ROOM,
 }
