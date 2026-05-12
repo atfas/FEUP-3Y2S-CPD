@@ -70,7 +70,7 @@ public class ClientHandler implements Runnable {
     }
 
     private void invalidRequest(Socket socket, Object payload) throws IOException {
-        new Request(RequestType.ERROR, "Invalid request: " + payload.toString()).sendRequest(socket);
+        new Request(RequestType.ERROR, "Invalid request").sendRequest(socket);
     }
 
     private void login(Object payload){
