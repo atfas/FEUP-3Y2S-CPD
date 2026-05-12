@@ -1,6 +1,8 @@
 package common.models;
 
-public class Message {
+import java.io.Serializable;
+
+public class Message implements Serializable {
     private User sender;
     private Room recipient;
     private String content;

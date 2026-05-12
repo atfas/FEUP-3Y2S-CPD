@@ -11,4 +11,5 @@ public enum RequestType {
     ENTER_ROOM,
     LEAVE_ROOM,
     SUCCESS,
+    ROOMS_LIST,
 }

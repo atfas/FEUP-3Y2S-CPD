@@ -16,6 +16,8 @@ public class ClientHandler implements Runnable {
     static private List<ClientHandler> connections = new ArrayList<>();
 
     private Socket socket;
+    private ObjectOutputStream out;
+    private ObjectInputStream in;
 
     private User user;
     private Room currentRoom;
@@ -23,6 +25,11 @@ public class ClientHandler implements Runnable {
 
     public ClientHandler(Socket socket) {
         this.socket = socket;
+        try {
+            socket.setKeepAlive(true);
+        } catch (IOException ex) {
+            System.out.println("Error setting keep-alive: " + ex.getMessage());
+        }
         this.user = null;
         this.currentRoom = null;
         this.isLoggedIn = false;
@@ -31,9 +38,14 @@ public class ClientHandler implements Runnable {
     @Override
     public void run() {
         try {
-            while (socket.isConnected()) {
-                Request request = Request.getRequest(socket);
+            out = new ObjectOutputStream(socket.getOutputStream());
+            in = new ObjectInputStream(socket.getInputStream());
                 System.out.println("New Client");
+
+            while (socket.isConnected()) {
+
+                Request request = Request.getRequest(in);
+                System.out.println("New Request");
 
                 switch (request.getType()) {
                     case LOGIN:
@@ -41,11 +53,11 @@ public class ClientHandler implements Runnable {
                         break;
                     case REGISTER:
                         // TODO: Implement Registration request
-                        notImplementedRequest(socket, RequestType.REGISTER);
+                        notImplementedRequest(RequestType.REGISTER);
                         break;
                     case CHAT_MESSAGE:
                         if (!isLoggedIn)
-                            invalidRequest(socket, "User must be logged in to send messages.");
+                            invalidRequest("User must be logged in to send messages.");
                         else
                             sendMessage(request.getPayload());
                         break;
@@ -54,28 +66,34 @@ public class ClientHandler implements Runnable {
                         break;
                     case RECONNECT:
                         // TODO: Implement reconnection handling
-                        notImplementedRequest(socket, RequestType.RECONNECT);
+                        notImplementedRequest(RequestType.RECONNECT);
                         break;
                     case UNKNOWN:
-                        invalidRequest(socket, request.getPayload());
+                        invalidRequest(request.getPayload());
                         break;
                     default:
-                        notImplementedRequest(socket, request.getType());
+                        notImplementedRequest(request.getType());
                         break;
                 }
             }
         } catch (IOException ex) {
             System.out.println("Client handler exception: " + ex.getMessage());
             ex.printStackTrace();
+        } finally {
+            try {
+                socket.close();
+            } catch (IOException ex) {
+                System.out.println("Error closing socket: " + ex.getMessage());
+            }
         }
     }
 
-    private void notImplementedRequest(Socket socket, RequestType type) throws IOException {
-        new Request(RequestType.ERROR, "Request type " + type.name() + " not implemented.").sendRequest(socket);
+    private void notImplementedRequest(RequestType type) throws IOException {
+        new Request(RequestType.ERROR, "Request type " + type.name() + " not implemented.").sendRequest(out);
     }
 
-    private void invalidRequest(Socket socket, Object payload) throws IOException {
-        new Request(RequestType.ERROR, "Invalid request").sendRequest(socket);
+    private void invalidRequest(Object payload) throws IOException {
+        new Request(RequestType.ERROR, "Invalid request").sendRequest(out);
     }
 
     private void login(Object payload) throws IOException {
@@ -86,7 +104,7 @@ public class ClientHandler implements Runnable {
         // TODO: Validate credentials against the database in a thread? and set
         // isLoggedIn accordingly.
         // For now, we will just accept any login for demonstration purposes.
-        new Request(RequestType.SUCCESS, null).sendRequest(socket);
+        new Request(RequestType.SUCCESS, null).sendRequest(out);
 
         this.user = loginUser;
         this.isLoggedIn = true;

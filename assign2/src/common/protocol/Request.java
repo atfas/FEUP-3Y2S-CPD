@@ -12,14 +12,12 @@ public class Request implements Serializable {
         this.payload = payload;
     }
 
-    public void sendRequest(Socket socket) throws IOException {
-        ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
+    public void sendRequest(ObjectOutputStream out) throws IOException {
         out.writeObject(this);
     }
 
-    public static Request getRequest(Socket socket) throws IOException{
+    public static Request getRequest(ObjectInputStream in) throws IOException{
         try {
-            ObjectInputStream in = new ObjectInputStream(socket.getInputStream());
             Object obj = in.readObject();
             if (obj instanceof Request) {
                 return (Request) obj;
