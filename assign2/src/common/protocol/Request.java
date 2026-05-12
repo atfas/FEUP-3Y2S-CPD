@@ -1,7 +1,6 @@
 package common.protocol;
 
 import java.io.*;
-import java.net.*;
 
 public class Request implements Serializable {
     private RequestType type;

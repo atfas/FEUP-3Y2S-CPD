@@ -19,6 +19,10 @@ public class ChatRoom {
 
     public void chat(ObjectInputStream in, ObjectOutputStream out) throws IOException {
         boolean chatting = true;
+        new Request(RequestType.ENTER_ROOM, currentRoom).sendRequest(out);
+        System.out.println("Entered room: " + currentRoom.getName());
+        System.out.println("Type /leave to exit the room.");
+
         while (chatting) {
             // Read user input and send messages to the server (NON-BLOCKING)
             String message = System.console().readLine();

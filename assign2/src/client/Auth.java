@@ -28,6 +28,9 @@ public class Auth {
         @SuppressWarnings("resource")
         Scanner scanner = new Scanner(System.in);
         boolean exit = false;
+        currentUser = null;
+        isLoggedIn = false;
+        
         while (!exit) {
             System.out.println("1. Login");
             System.out.println("2. Register");
@@ -47,6 +50,7 @@ public class Auth {
                 case "3":
                     System.out.println("Exiting...");
                     exit = true;
+                    break;
                 default:
                     System.out.println("Invalid option. Please try again.");
             }
