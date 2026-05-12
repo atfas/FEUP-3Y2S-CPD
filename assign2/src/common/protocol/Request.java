@@ -27,7 +27,7 @@ public class Request {
             } else {
                 return new Request(RequestType.UNKNOWN, obj);
             }
-        } catch (ClassNotFoundException e) {
+        } catch (ClassNotFoundException | StreamCorruptedException e) {
             return new Request(RequestType.UNKNOWN, null);
         }
     }
