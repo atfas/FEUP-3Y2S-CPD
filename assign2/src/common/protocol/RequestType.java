@@ -10,4 +10,5 @@ public enum RequestType {
     ERROR,
     ENTER_ROOM,
     LEAVE_ROOM,
+    SUCCESS,
 }
