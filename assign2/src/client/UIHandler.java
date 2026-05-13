@@ -31,6 +31,7 @@ public class UIHandler {
     private final BufferedReader    input;
 
     private User loggedInUser = null;
+    private Room currentRoom  = null;
 
     public UIHandler(ConnectionManager connection) {
         this.connection = connection;
@@ -45,12 +46,13 @@ public class UIHandler {
      * Runs the full client session:
      *   1. Welcome screen
      *   2. Auth loop (until logged in)
-     *   3. Room selection + chat loop
+     *   3. Room selection loop (until a room is joined)
+     *   4. Chat loop
      */
     public void start() throws IOException {
         printWelcome();
         authLoop();
-        // Future: roomLoop();
+        roomLoop();
         chatLoop();
     }
 
@@ -91,7 +93,7 @@ public class UIHandler {
                     connection.close();
                     System.exit(0);
                 }
-                default  -> printError("Please enter 1, 2, or 0.");
+                default -> printError("Please enter 1, 2, or 0.");
             }
         }
     }
@@ -145,22 +147,112 @@ public class UIHandler {
     }
 
     // ------------------------------------------------------------------ //
-    //  Chat loop (placeholder — expand with room selection later)
+    //  Room selection loop
+    // ------------------------------------------------------------------ //
+
+    @SuppressWarnings("unchecked")
+    private void roomLoop() throws IOException {
+        while (currentRoom == null) {
+            // Ask the server for the current room list.
+            Request response = connection.sendAndReceive(
+                new Request(RequestType.LIST_ROOMS, null)
+            );
+
+            if (response.getType() != RequestType.ROOMS_LIST) {
+                printError("Could not fetch room list: " + response.getPayload());
+                continue;
+            }
+
+            List<Room> rooms = (List<Room>) response.getPayload();
+            printRoomMenu(rooms);
+
+            String choice = readLine("Your choice").trim();
+
+            if (choice.equals("0")) {
+                System.out.println(YELLOW + "Goodbye!" + RESET);
+                connection.close();
+                System.exit(0);
+            }
+
+            // Numeric choice — pick from list.
+            try {
+                int index = Integer.parseInt(choice) - 1;
+                if (index >= 0 && index < rooms.size()) {
+                    joinRoom(rooms.get(index));
+                    continue;
+                }
+            } catch (NumberFormatException ignored) {}
+
+            // Non-numeric or out-of-range — treat as a custom room name.
+            if (!choice.isBlank()) {
+                joinRoom(new Room(choice));
+            } else {
+                printError("Please enter a number from the list or a room name.");
+            }
+        }
+    }
+
+    private void printRoomMenu(List<Room> rooms) {
+        System.out.println();
+        System.out.println(CYAN + BOLD + "┌─ Available Rooms ─────────────────────┐" + RESET);
+        if (rooms.isEmpty()) {
+            System.out.println(CYAN + BOLD + "│  (no rooms yet)                       │" + RESET);
+        } else {
+            for (int i = 0; i < rooms.size(); i++) {
+                String line = String.format("│  %2d) %-34s│", i + 1, rooms.get(i).getName());
+                System.out.println(CYAN + BOLD + line + RESET);
+            }
+        }
+        System.out.println(CYAN + BOLD + "│   0) Exit                             │" + RESET);
+        System.out.println(CYAN + BOLD + "└───────────────────────────────────────┘" + RESET);
+        System.out.println(YELLOW + "  Enter a number to join, or type a new room name to create it." + RESET);
+        System.out.println();
+    }
+
+    private void joinRoom(Room room) throws IOException {
+        Request response = connection.sendAndReceive(
+            new Request(RequestType.ENTER_ROOM, room)
+        );
+
+        if (response.getType() == RequestType.SUCCESS) {
+            currentRoom = (Room) response.getPayload();
+            System.out.println(GREEN + "\nJoined room: " + currentRoom.getName() + RESET);
+        } else {
+            printError("Could not join room: " + response.getPayload());
+        }
+    }
+
+    // ------------------------------------------------------------------ //
+    //  Chat loop
     // ------------------------------------------------------------------ //
 
     private void chatLoop() throws IOException {
         System.out.println();
-        System.out.println(YELLOW + "Type your message and press Enter. Type " +
-            BOLD + "/close" + RESET + YELLOW + " to quit." + RESET);
+        System.out.println(YELLOW + "You are in " + BOLD + "#" + currentRoom.getName() + RESET
+            + YELLOW + ". Type a message and press Enter." + RESET);
+        System.out.println(YELLOW + "Commands: " + BOLD + "/rooms" + RESET + YELLOW
+            + " to switch rooms, " + BOLD + "/close" + RESET + YELLOW + " to quit." + RESET);
         System.out.println();
 
         while (connection.isConnected()) {
             String line = readLine(loggedInUser.getUsername());
+
             if (line == null || line.equalsIgnoreCase("/close")) {
                 System.out.println(YELLOW + "Disconnecting. Goodbye!" + RESET);
                 connection.close();
                 break;
             }
+
+            if (line.equalsIgnoreCase("/rooms")) {
+                currentRoom = null;
+                roomLoop();
+                System.out.println(YELLOW + "Now in " + BOLD + "#" + currentRoom.getName()
+                    + RESET + YELLOW + ". Keep chatting!" + RESET);
+                continue;
+            }
+
+            if (line.isBlank()) continue;
+
             // TODO: send CHAT_MESSAGE request with current room
         }
     }
@@ -185,7 +277,6 @@ public class UIHandler {
             char[] pwd = console.readPassword(BOLD + prompt + RESET + ": ");
             return pwd != null ? new String(pwd) : "";
         }
-        // Fallback — password will be visible
         return readLine(prompt);
     }
 
