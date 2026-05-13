@@ -157,19 +157,47 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        if (currentRoom != null)
+        if (currentRoom != null) {
+            broadcastSystem(currentRoom, user.getUsername() + " left the room.");
             roomManager.leaveRoom(currentRoom.getName(), this);
+        }
 
-        currentRoom = roomManager.joinRoom(room.getName(), this);
+        // Broadcast join to existing members BEFORE this client joins.
+        String roomKey = room.getName().trim().toLowerCase();
+        broadcastSystemTo(roomKey, user.getUsername() + " joined the room.");
+
+        currentRoom = roomManager.joinRoom(roomKey, this);
         new Request(RequestType.SUCCESS, currentRoom).sendRequest(out);
     }
 
     private void leaveRoom() throws IOException {
         if (currentRoom != null) {
             roomManager.leaveRoom(currentRoom.getName(), this);
+            broadcastSystem(currentRoom, user.getUsername() + " left the room.");
             currentRoom = null;
         }
         new Request(RequestType.SUCCESS, null).sendRequest(out);
+    }
+
+    /** Broadcasts a system notification to all members of a room (by Room object). */
+    private void broadcastSystem(Room room, String text) {
+        Message msg = new Message(null, room, text);
+        Request req = new Request(RequestType.CHAT_MESSAGE, msg);
+        for (ClientHandler member : roomManager.getMembers(room.getName())) {
+            if (member != this) {
+                try { req.sendRequest(member.out); } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    /** Broadcasts a system notification to all current members of a room (by name, before joining). */
+    private void broadcastSystemTo(String roomName, String text) {
+        Room room = new Room(roomName);
+        Message msg = new Message(null, room, text);
+        Request req = new Request(RequestType.CHAT_MESSAGE, msg);
+        for (ClientHandler member : roomManager.getMembers(roomName)) {
+            try { req.sendRequest(member.out); } catch (IOException ignored) {}
+        }
     }
 
     private void listRooms() throws IOException {

@@ -2,7 +2,10 @@ package client;
 
 import java.io.*;
 import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
+import common.models.Message;
 import common.models.Room;
 import common.models.User;
 import common.protocol.Request;
@@ -11,15 +14,17 @@ import common.protocol.RequestType;
 /**
  * Handles all console input/output for the chat client.
  *
- * Responsibilities:
- *   - Welcome screen
- *   - Auth menu (login / register)
- *   - Room selection
- *   - Chat loop
+ * Stream ownership rule — only ONE thread ever calls connection.receive().
+ * That is the background reader thread, which runs for the whole session.
+ * It puts every incoming Request into `inbox`.
+ *
+ * chatLoop()  polls inbox and prints chat messages.
+ * roomLoop()  polls inbox and waits for ROOMS_LIST / SUCCESS responses.
+ *
+ * Writing (send) is only ever done from the main thread, so no lock needed there.
  */
 public class UIHandler {
 
-    // ANSI colours — fall back gracefully if the terminal doesn't support them.
     private static final String RESET  = "\u001B[0m";
     private static final String BOLD   = "\u001B[1m";
     private static final String CYAN   = "\u001B[36m";
@@ -27,8 +32,9 @@ public class UIHandler {
     private static final String YELLOW = "\u001B[33m";
     private static final String RED    = "\u001B[31m";
 
-    private final ConnectionManager connection;
-    private final BufferedReader    input;
+    private final ConnectionManager      connection;
+    private final BufferedReader         input;
+    private final BlockingQueue<Request> inbox = new LinkedBlockingQueue<>();
 
     private User loggedInUser = null;
     private Room currentRoom  = null;
@@ -42,18 +48,38 @@ public class UIHandler {
     //  Entry point
     // ------------------------------------------------------------------ //
 
-    /**
-     * Runs the full client session:
-     *   1. Welcome screen
-     *   2. Auth loop (until logged in)
-     *   3. Room selection loop (until a room is joined)
-     *   4. Chat loop
-     */
     public void start() throws IOException {
+        // Start the single background reader immediately.
+        // It fills `inbox`; nothing else ever calls connection.receive().
+        Thread.ofVirtual().start(this::readLoop);
+
         printWelcome();
         authLoop();
         roomLoop();
         chatLoop();
+    }
+
+    // ------------------------------------------------------------------ //
+    //  Background reader — the ONLY thread that calls connection.receive()
+    // ------------------------------------------------------------------ //
+
+    private void readLoop() {
+        try {
+            while (connection.isConnected()) {
+                Request req = connection.receive();
+                inbox.put(req);
+            }
+        } catch (IOException | InterruptedException ignored) {}
+    }
+
+    /** Blocks until the next Request arrives in the inbox. */
+    private Request nextResponse() throws IOException {
+        try {
+            return inbox.take();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while waiting for server response", e);
+        }
     }
 
     // ------------------------------------------------------------------ //
@@ -84,16 +110,11 @@ public class UIHandler {
         while (loggedInUser == null) {
             printAuthMenu();
             String choice = readLine("Your choice").trim();
-
             switch (choice) {
                 case "1" -> doLogin();
                 case "2" -> doRegister();
-                case "0" -> {
-                    System.out.println(YELLOW + "Goodbye!" + RESET);
-                    connection.close();
-                    System.exit(0);
-                }
-                default -> printError("Please enter 1, 2, or 0.");
+                case "0" -> { System.out.println(YELLOW + "Goodbye!" + RESET); connection.close(); System.exit(0); }
+                default  -> printError("Please enter 1, 2, or 0.");
             }
         }
     }
@@ -111,9 +132,8 @@ public class UIHandler {
         String username = readLine("Username");
         String password = readPassword("Password");
 
-        Request response = connection.sendAndReceive(
-            new Request(RequestType.LOGIN, new User(username, password))
-        );
+        connection.send(new Request(RequestType.LOGIN, new User(username, password)));
+        Request response = nextResponse();
 
         if (response.getType() == RequestType.SUCCESS) {
             loggedInUser = new User(username, password);
@@ -129,14 +149,10 @@ public class UIHandler {
         String password = readPassword("Choose a password");
         String confirm  = readPassword("Confirm password");
 
-        if (!password.equals(confirm)) {
-            printError("Passwords do not match. Please try again.");
-            return;
-        }
+        if (!password.equals(confirm)) { printError("Passwords do not match."); return; }
 
-        Request response = connection.sendAndReceive(
-            new Request(RequestType.REGISTER, new User(username, password))
-        );
+        connection.send(new Request(RequestType.REGISTER, new User(username, password)));
+        Request response = nextResponse();
 
         if (response.getType() == RequestType.SUCCESS) {
             loggedInUser = new User(username, password);
@@ -153,13 +169,13 @@ public class UIHandler {
     @SuppressWarnings("unchecked")
     private void roomLoop() throws IOException {
         while (currentRoom == null) {
-            // Ask the server for the current room list.
-            Request response = connection.sendAndReceive(
-                new Request(RequestType.LIST_ROOMS, null)
-            );
+            connection.send(new Request(RequestType.LIST_ROOMS, null));
 
-            if (response.getType() != RequestType.ROOMS_LIST) {
-                printError("Could not fetch room list: " + response.getPayload());
+            // Drain any stale chat messages that arrived before our response.
+            Request response = drainUntil(RequestType.ROOMS_LIST);
+
+            if (response == null || response.getType() != RequestType.ROOMS_LIST) {
+                printError("Could not fetch room list.");
                 continue;
             }
 
@@ -174,21 +190,31 @@ public class UIHandler {
                 System.exit(0);
             }
 
-            // Numeric choice — pick from list.
             try {
                 int index = Integer.parseInt(choice) - 1;
-                if (index >= 0 && index < rooms.size()) {
-                    joinRoom(rooms.get(index));
-                    continue;
-                }
+                if (index >= 0 && index < rooms.size()) { joinRoom(rooms.get(index)); continue; }
             } catch (NumberFormatException ignored) {}
 
-            // Non-numeric or out-of-range — treat as a custom room name.
-            if (!choice.isBlank()) {
-                joinRoom(new Room(choice));
-            } else {
-                printError("Please enter a number from the list or a room name.");
+            if (!choice.isBlank()) joinRoom(new Room(choice));
+            else printError("Please enter a number from the list or a room name.");
+        }
+    }
+
+    /**
+     * Reads from inbox, printing any CHAT_MESSAGE frames that arrive
+     * while we're waiting, until we see a frame of the expected type.
+     */
+    private Request drainUntil(RequestType expected) throws IOException {
+        while (true) {
+            Request req = nextResponse();
+            if (req.getType() == expected) return req;
+
+            // A chat message snuck in — print it so it isn't lost.
+            if (req.getType() == RequestType.CHAT_MESSAGE
+                    && req.getPayload() instanceof Message msg) {
+                printIncomingMessage(msg);
             }
+            // Any other unexpected frame: discard and keep waiting.
         }
     }
 
@@ -199,8 +225,8 @@ public class UIHandler {
             System.out.println(CYAN + BOLD + "│  (no rooms yet)                       │" + RESET);
         } else {
             for (int i = 0; i < rooms.size(); i++) {
-                String line = String.format("│  %2d) %-34s│", i + 1, rooms.get(i).getName());
-                System.out.println(CYAN + BOLD + line + RESET);
+                String entry = String.format("│  %2d) %-34s│", i + 1, rooms.get(i).getName());
+                System.out.println(CYAN + BOLD + entry + RESET);
             }
         }
         System.out.println(CYAN + BOLD + "│   0) Exit                             │" + RESET);
@@ -210,13 +236,11 @@ public class UIHandler {
     }
 
     private void joinRoom(Room room) throws IOException {
-        Request response = connection.sendAndReceive(
-            new Request(RequestType.ENTER_ROOM, room)
-        );
-
+        connection.send(new Request(RequestType.ENTER_ROOM, room));
+        Request response = drainUntil(RequestType.SUCCESS);
         if (response.getType() == RequestType.SUCCESS) {
             currentRoom = (Room) response.getPayload();
-            System.out.println(GREEN + "\nJoined room: " + currentRoom.getName() + RESET);
+            System.out.println(GREEN + "\nJoined room: #" + currentRoom.getName() + RESET);
         } else {
             printError("Could not join room: " + response.getPayload());
         }
@@ -227,12 +251,10 @@ public class UIHandler {
     // ------------------------------------------------------------------ //
 
     private void chatLoop() throws IOException {
-        System.out.println();
-        System.out.println(YELLOW + "You are in " + BOLD + "#" + currentRoom.getName() + RESET
-            + YELLOW + ". Type a message and press Enter." + RESET);
-        System.out.println(YELLOW + "Commands: " + BOLD + "/rooms" + RESET + YELLOW
-            + " to switch rooms, " + BOLD + "/close" + RESET + YELLOW + " to quit." + RESET);
-        System.out.println();
+        printChatHeader();
+
+        // Drain inbox on a background thread so messages print while user types.
+        Thread.ofVirtual().start(this::chatDrainLoop);
 
         while (connection.isConnected()) {
             String line = readLine(loggedInUser.getUsername());
@@ -245,16 +267,63 @@ public class UIHandler {
 
             if (line.equalsIgnoreCase("/rooms")) {
                 currentRoom = null;
+                // chatDrainLoop is still running but roomLoop() uses drainUntil()
+                // which correctly handles stray CHAT_MESSAGE frames in the queue.
                 roomLoop();
-                System.out.println(YELLOW + "Now in " + BOLD + "#" + currentRoom.getName()
-                    + RESET + YELLOW + ". Keep chatting!" + RESET);
+                printChatHeader();
+                // A new chatDrainLoop is NOT needed — the existing one keeps running.
                 continue;
             }
 
             if (line.isBlank()) continue;
 
-            // TODO: send CHAT_MESSAGE request with current room
+            connection.send(new Request(RequestType.CHAT_MESSAGE,
+                new Message(loggedInUser, currentRoom, line)));
         }
+    }
+
+    /**
+     * Runs on a background thread during chat.
+     * Pulls from inbox and prints CHAT_MESSAGE frames.
+     * When roomLoop() is active it also pulls from inbox via drainUntil(),
+     * so this thread may be starved temporarily — that's fine, it just blocks
+     * on inbox.take() until something arrives.
+     */
+    private void chatDrainLoop() {
+        try {
+            while (connection.isConnected()) {
+                Request req = inbox.take();
+                if (req.getType() == RequestType.CHAT_MESSAGE
+                        && req.getPayload() instanceof Message msg) {
+                    printIncomingMessage(msg);
+                    System.out.print(BOLD + loggedInUser.getUsername() + RESET + ": ");
+                }
+                // Non-chat frames (e.g. ERROR) during chat are silently ignored here.
+            }
+        } catch (InterruptedException ignored) {}
+    }
+
+    // ------------------------------------------------------------------ //
+    //  Shared print helper
+    // ------------------------------------------------------------------ //
+
+    private void printIncomingMessage(Message msg) {
+        System.out.println();
+        if (msg.getSender() == null) {
+            System.out.println(YELLOW + "* " + msg.getContent() + RESET);
+        } else {
+            System.out.println(CYAN + BOLD + msg.getSender().getUsername()
+                + RESET + ": " + msg.getContent());
+        }
+    }
+
+    private void printChatHeader() {
+        System.out.println();
+        System.out.println(YELLOW + "You are in " + BOLD + "#" + currentRoom.getName() + RESET
+            + YELLOW + ". Type a message and press Enter." + RESET);
+        System.out.println(YELLOW + "Commands: " + BOLD + "/rooms" + RESET + YELLOW
+            + " to switch rooms, " + BOLD + "/close" + RESET + YELLOW + " to quit." + RESET);
+        System.out.println();
     }
 
     // ------------------------------------------------------------------ //
@@ -266,11 +335,6 @@ public class UIHandler {
         return input.readLine();
     }
 
-    /**
-     * Reads a password. Uses Console for hidden input when available
-     * (i.e. when running in a real terminal), otherwise falls back to
-     * plain BufferedReader (e.g. when stdin is piped in tests).
-     */
     private String readPassword(String prompt) throws IOException {
         Console console = System.console();
         if (console != null) {
@@ -279,10 +343,6 @@ public class UIHandler {
         }
         return readLine(prompt);
     }
-
-    // ------------------------------------------------------------------ //
-    //  Output helpers
-    // ------------------------------------------------------------------ //
 
     private void printError(String message) {
         System.out.println(RED + "\n" + message + RESET + "\n");

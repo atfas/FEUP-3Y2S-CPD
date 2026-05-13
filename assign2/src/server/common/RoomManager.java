@@ -20,7 +20,7 @@ import java.util.stream.Collectors;
 public class RoomManager {
 
     // Default rooms that always exist, even when empty.
-    private static final List<String> DEFAULT_ROOMS = List.of("general", "random", "help");
+    private static final List<String> DEFAULT_ROOMS = List.of("musica", "filmes");
 
     // roomName -> set of ClientHandlers currently in that room.
     private final Map<String, Set<ClientHandler>> rooms = new ConcurrentHashMap<>();
@@ -31,7 +31,6 @@ public class RoomManager {
         }
         System.out.println("[RoomManager] Initialised with default rooms: " + DEFAULT_ROOMS);
     }
-
     /**
      * Adds a client to a room, creating the room if it doesn't exist.
      *
