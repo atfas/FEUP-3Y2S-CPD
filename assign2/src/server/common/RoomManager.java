@@ -6,7 +6,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.stream.Collectors;
 
 /**
@@ -15,7 +16,6 @@ import java.util.stream.Collectors;
  * Rooms are created on first join and removed when the last member leaves,
  * except for the default rooms which are always present.
  *
- * Thread-safety is provided by ConcurrentHashMap and ConcurrentHashMap.newKeySet().
  */
 public class RoomManager {
 
@@ -23,14 +23,28 @@ public class RoomManager {
     private static final List<String> DEFAULT_ROOMS = List.of("musica", "filmes");
 
     // roomName -> set of ClientHandlers currently in that room.
-    private final Map<String, Set<ClientHandler>> rooms = new ConcurrentHashMap<>();
+    private final Map<String, Set<ClientHandler>> rooms = new HashMap<>();
 
     public RoomManager() {
         for (String name : DEFAULT_ROOMS) {
-            rooms.put(name, ConcurrentHashMap.newKeySet());
+            rooms.put(name, new HashSet<ClientHandler>());
         }
         System.out.println("[RoomManager] Initialised with default rooms: " + DEFAULT_ROOMS);
     }
+
+    private Set<ClientHandler> getOrCreateRoom(String roomName) {
+        // Fast path for existing rooms, to avoid locking on every message.
+        if (rooms.containsKey(roomName)){
+            return rooms.get(roomName);
+        }
+
+        // Lock read and write access to the rooms map.
+        synchronized (rooms) {
+            // Check again in case another thread created the room while we were waiting for the lock.
+            return rooms.computeIfAbsent(roomName, k -> new HashSet<>());
+        }
+    }
+
     /**
      * Adds a client to a room, creating the room if it doesn't exist.
      *
@@ -38,7 +52,11 @@ public class RoomManager {
      */
     public Room joinRoom(String roomName, ClientHandler client) {
         String key = normalise(roomName);
-        rooms.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet()).add(client);
+        // Create a lock for the room if it doesn't exist, then add the client to the room's member set.
+        Set<ClientHandler> members = getOrCreateRoom(roomName);
+        synchronized (members) {
+            members.add(client);
+        }
         System.out.println("[RoomManager] " + client + " joined room: " + key);
         return new Room(key);
     }
@@ -52,12 +70,17 @@ public class RoomManager {
         Set<ClientHandler> members = rooms.get(key);
         if (members == null) return;
 
-        members.remove(client);
+        synchronized (members) {
+            members.remove(client);
+        }
         System.out.println("[RoomManager] " + client + " left room: " + key);
 
         // Clean up non-default empty rooms.
         if (members.isEmpty() && !DEFAULT_ROOMS.contains(key)) {
-            rooms.remove(key, members);   // only removes if still empty (avoids race)
+            synchronized (rooms) {
+                if (members.isEmpty())
+                    rooms.remove(key, members);   // only removes if still empty (avoids race)
+            }
             System.out.println("[RoomManager] Room deleted (empty): " + key);
         }
     }
@@ -66,14 +89,16 @@ public class RoomManager {
      * Removes a client from every room they are in (e.g. on disconnect).
      */
     public void leaveAllRooms(ClientHandler client) {
-        rooms.forEach((name, members) -> {
-            if (members.remove(client)) {
-                System.out.println("[RoomManager] " + client + " removed from room: " + name);
-                if (members.isEmpty() && !DEFAULT_ROOMS.contains(name)) {
-                    rooms.remove(name, members);
+        synchronized (rooms) {
+            rooms.forEach((name, members) -> {
+                if (members.remove(client)) {
+                    System.out.println("[RoomManager] " + client + " removed from room: " + name);
+                    if (members.isEmpty() && !DEFAULT_ROOMS.contains(name)) {
+                        rooms.remove(name, members);
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 
     /**
