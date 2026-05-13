@@ -296,7 +296,9 @@ public class UIHandler {
                 if (req.getType() == RequestType.CHAT_MESSAGE
                         && req.getPayload() instanceof Message msg) {
                     printIncomingMessage(msg);
+                    // Reprint the prompt so the user can keep typing.
                     System.out.print(BOLD + loggedInUser.getUsername() + RESET + ": ");
+                    System.out.flush();
                 }
                 // Non-chat frames (e.g. ERROR) during chat are silently ignored here.
             }
@@ -308,7 +310,10 @@ public class UIHandler {
     // ------------------------------------------------------------------ //
 
     private void printIncomingMessage(Message msg) {
-        System.out.println();
+        // \r moves to start of line; \033[2K erases it entirely —
+        // this wipes whatever the user was typing mid-line so the
+        // incoming message prints cleanly without leftover prompt text.
+        System.out.print("\r\033[2K");
         if (msg.getSender() == null) {
             System.out.println(YELLOW + "* " + msg.getContent() + RESET);
         } else {
