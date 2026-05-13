@@ -10,6 +10,7 @@ public enum RequestType {
     ERROR,
     ENTER_ROOM,
     LEAVE_ROOM,
+    LIST_ROOMS,
     SUCCESS,
     ROOMS_LIST,
 }
