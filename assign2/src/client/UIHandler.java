@@ -190,6 +190,8 @@ public class UIHandler {
                 System.exit(0);
             }
 
+            if (choice.equalsIgnoreCase("/refresh")) continue;
+
             try {
                 int index = Integer.parseInt(choice) - 1;
                 if (index >= 0 && index < rooms.size()) { joinRoom(rooms.get(index)); continue; }
@@ -232,6 +234,7 @@ public class UIHandler {
         System.out.println(CYAN + BOLD + "│   0) Exit                             │" + RESET);
         System.out.println(CYAN + BOLD + "└───────────────────────────────────────┘" + RESET);
         System.out.println(YELLOW + "  Enter a number to join, or type a new room name to create it." + RESET);
+        System.out.println(YELLOW + "  Use '/refresh' to update the room list." + RESET);
         System.out.println();
     }
 
@@ -246,6 +249,17 @@ public class UIHandler {
         }
     }
 
+    private void leaveRoom() throws IOException {
+        connection.send(new Request(RequestType.LEAVE_ROOM, null));
+        Request response = drainUntil(RequestType.SUCCESS);
+        if (response.getType() == RequestType.SUCCESS) {
+            System.out.println(GREEN + "\nLeft room: #" + currentRoom.getName() + RESET);
+            currentRoom = null;
+        } else {
+            printError("Could not leave room: " + response.getPayload());
+        }
+    }
+
     // ------------------------------------------------------------------ //
     //  Chat loop
     // ------------------------------------------------------------------ //
@@ -254,7 +268,7 @@ public class UIHandler {
         printChatHeader();
 
         // Drain inbox on a background thread so messages print while user types.
-        Thread.ofVirtual().start(this::chatDrainLoop);
+        Thread chatDrainThread = Thread.ofVirtual().start(this::chatDrainLoop);
 
         while (connection.isConnected()) {
             String line = readLine(loggedInUser.getUsername());
@@ -266,12 +280,13 @@ public class UIHandler {
             }
 
             if (line.equalsIgnoreCase("/rooms")) {
-                currentRoom = null;
-                // chatDrainLoop is still running but roomLoop() uses drainUntil()
-                // which correctly handles stray CHAT_MESSAGE frames in the queue.
+                // Stop the chat drain thread while we do room selection, to avoid interleaving chat messages with the room menu. It will be restarted when we re-enter chatLoop().
+                chatDrainThread.interrupt();
+                leaveRoom();
                 roomLoop();
                 printChatHeader();
-                // A new chatDrainLoop is NOT needed — the existing one keeps running.
+
+                chatDrainThread = Thread.ofVirtual().start(this::chatDrainLoop);
                 continue;
             }
 
@@ -295,7 +310,9 @@ public class UIHandler {
                 Request req = inbox.take();
                 if (req.getType() == RequestType.CHAT_MESSAGE
                         && req.getPayload() instanceof Message msg) {
-                    printIncomingMessage(msg);
+                    if (currentRoom != null && msg.getRecipient().equals(currentRoom)) {
+                        printIncomingMessage(msg);
+                    }
                     // Reprint the prompt so the user can keep typing.
                     System.out.print(BOLD + loggedInUser.getUsername() + RESET + ": ");
                     System.out.flush();
