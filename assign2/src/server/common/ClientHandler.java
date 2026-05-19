@@ -4,6 +4,7 @@ import java.io.*;
 import java.net.*;
 import java.util.List;
 
+import common.models.ClientSession;
 import common.models.Message;
 import common.models.Room;
 import common.models.User;
@@ -65,7 +66,7 @@ public class ClientHandler implements Runnable {
                     case LEAVE_ROOM   -> leaveRoom();
                     case LIST_ROOMS   -> listRooms();
                     case LOGOUT       -> logout();
-                    case RECONNECT    -> notImplementedRequest(RequestType.RECONNECT);
+                    case RECONNECT    -> reconnect(request.getPayload());
                     case UNKNOWN      -> invalidRequest(request.getPayload());
                     default           -> notImplementedRequest(request.getType());
                 }
@@ -203,6 +204,36 @@ public class ClientHandler implements Runnable {
     private void listRooms() throws IOException {
         List<Room> rooms = roomManager.listRooms();
         new Request(RequestType.ROOMS_LIST, (java.io.Serializable) rooms).sendRequest(out);
+    }
+
+    private void reconnect(Object payload) throws IOException {
+        if (!(payload instanceof ClientSession session) || session.getUser() == null) {
+            invalidRequest("RECONNECT payload must be a ClientSession.");
+            return;
+        }
+
+        User reconnectUser = session.getUser();
+        try {
+            if (!database.validateUser(reconnectUser.getUsername(), reconnectUser.getPassword())) {
+                new Request(RequestType.ERROR, "Invalid username or password.").sendRequest(out);
+                return;
+            }
+        } catch (DatabaseException e) {
+            new Request(RequestType.ERROR, "Server error during reconnect.").sendRequest(out);
+            return;
+        }
+
+        this.user = reconnectUser;
+        this.isLoggedIn = true;
+
+        Room room = session.getRoom();
+        this.currentRoom = null;
+        if (room != null) {
+            currentRoom = roomManager.joinRoom(room.getName(), this);
+        }
+
+        new Request(RequestType.SUCCESS, currentRoom).sendRequest(out);
+        System.out.println("[ClientHandler] Reconnected: " + reconnectUser.getUsername());
     }
 
     private void logout() {

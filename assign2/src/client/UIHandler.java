@@ -65,7 +65,7 @@ public class UIHandler {
 
     private void readLoop() {
         try {
-            while (connection.isConnected()) {
+            while (!connection.isClosed()) {
                 Request req = connection.receive();
                 inbox.put(req);
             }
@@ -137,6 +137,7 @@ public class UIHandler {
 
         if (response.getType() == RequestType.SUCCESS) {
             loggedInUser = new User(username, password);
+            connection.updateSession(loggedInUser, currentRoom);
             System.out.println(GREEN + "\nLogin successful! Welcome back, " + username + "!" + RESET);
         } else {
             printError("Login failed: " + response.getPayload());
@@ -156,6 +157,7 @@ public class UIHandler {
 
         if (response.getType() == RequestType.SUCCESS) {
             loggedInUser = new User(username, password);
+            connection.updateSession(loggedInUser, currentRoom);
             System.out.println(GREEN + "\nAccount created! Welcome, " + username + "!" + RESET);
         } else {
             printError("Registration failed: " + response.getPayload());
@@ -243,6 +245,7 @@ public class UIHandler {
         Request response = drainUntil(RequestType.SUCCESS);
         if (response.getType() == RequestType.SUCCESS) {
             currentRoom = (Room) response.getPayload();
+            connection.updateSession(loggedInUser, currentRoom);
             System.out.println(GREEN + "\nJoined room: #" + currentRoom.getName() + RESET);
         } else {
             printError("Could not join room: " + response.getPayload());
@@ -255,6 +258,7 @@ public class UIHandler {
         if (response.getType() == RequestType.SUCCESS) {
             System.out.println(GREEN + "\nLeft room: #" + currentRoom.getName() + RESET);
             currentRoom = null;
+            connection.updateSession(loggedInUser, currentRoom);
         } else {
             printError("Could not leave room: " + response.getPayload());
         }
@@ -270,7 +274,7 @@ public class UIHandler {
         // Drain inbox on a background thread so messages print while user types.
         Thread chatDrainThread = Thread.ofVirtual().start(this::chatDrainLoop);
 
-        while (connection.isConnected()) {
+        while (!connection.isClosed()) {
             String line = readLine(loggedInUser.getUsername());
 
             if (line == null || line.equalsIgnoreCase("/close")) {
@@ -306,7 +310,7 @@ public class UIHandler {
      */
     private void chatDrainLoop() {
         try {
-            while (connection.isConnected()) {
+            while (!connection.isClosed()) {
                 Request req = inbox.take();
                 if (req.getType() == RequestType.CHAT_MESSAGE
                         && req.getPayload() instanceof Message msg) {
