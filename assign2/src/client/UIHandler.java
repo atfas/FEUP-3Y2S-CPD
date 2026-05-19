@@ -64,12 +64,23 @@ public class UIHandler {
     // ------------------------------------------------------------------ //
 
     private void readLoop() {
-        try {
-            while (!connection.isClosed()) {
+        while (!connection.isClosed()) {
+            try {
                 Request req = connection.receive();
                 inbox.put(req);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break; // stop the reader thread on interrupt
+            } catch (IOException ioe) {
+                // transient — wait a bit and try again so reconnect can succeed
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
             }
-        } catch (IOException | InterruptedException ignored) {}
+        }
     }
 
     /** Blocks until the next Request arrives in the inbox. */
@@ -137,6 +148,7 @@ public class UIHandler {
 
         if (response.getType() == RequestType.SUCCESS) {
             loggedInUser = new User(username, password);
+            loggedInUser.setSessionCookie((String) response.getPayload());
             connection.updateSession(loggedInUser, currentRoom);
             System.out.println(GREEN + "\nLogin successful! Welcome back, " + username + "!" + RESET);
         } else {
@@ -157,6 +169,7 @@ public class UIHandler {
 
         if (response.getType() == RequestType.SUCCESS) {
             loggedInUser = new User(username, password);
+            loggedInUser.setSessionCookie((String) response.getPayload());
             connection.updateSession(loggedInUser, currentRoom);
             System.out.println(GREEN + "\nAccount created! Welcome, " + username + "!" + RESET);
         } else {
@@ -323,7 +336,9 @@ public class UIHandler {
                 }
                 // Non-chat frames (e.g. ERROR) during chat are silently ignored here.
             }
-        } catch (InterruptedException ignored) {}
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     // ------------------------------------------------------------------ //

@@ -4,8 +4,8 @@ import java.io.*;
 import java.net.*;
 import java.util.List;
 
-import common.models.ClientSession;
 import common.models.Message;
+import common.models.ClientSession;
 import common.models.Room;
 import common.models.User;
 import common.protocol.Request;
@@ -15,24 +15,27 @@ import database.Database.DatabaseException;
 import server.auth.Registration;
 
 public class ClientHandler implements Runnable {
-
-    private final Socket             socket;
-    private final ObjectOutputStream out;
-    private final ObjectInputStream  in;
+    private Socket             socket;
+    private ObjectOutputStream out;
+    private ObjectInputStream  in;
     private final Database           database;
     private final RoomManager        roomManager;
+    private final SessionManager     sessionManager;
 
     private User    user;
     private Room    currentRoom;
     private boolean isLoggedIn;
 
-    public ClientHandler(Socket socket, Database database, RoomManager roomManager) throws IOException {
+    public ClientHandler(Socket socket, Database database, RoomManager roomManager, SessionManager sessionManager) throws IOException {
         this.socket      = socket;
         this.database    = database;
         this.roomManager = roomManager;
+        this.sessionManager = sessionManager;
         this.user        = null;
         this.currentRoom = null;
         this.isLoggedIn  = false;
+
+        socket.setSoTimeout(30 * 60 * 1000); // 30 min timeout for read operations
 
         // Output stream must be created first to avoid deadlock
         // (both sides waiting for the other's stream header).
@@ -49,8 +52,9 @@ public class ClientHandler implements Runnable {
     public void run() {
         System.out.println("[ClientHandler] New connection from " + socket.getInetAddress());
         try {
-            while (socket.isConnected()) {
+            while (true) {
                 Request request = Request.getRequest(in);
+                System.out.println("[ClientHandler] Received request: " + request.getType());
 
                 switch (request.getType()) {
                     case LOGIN        -> login(request.getPayload());
@@ -71,6 +75,9 @@ public class ClientHandler implements Runnable {
                     default           -> notImplementedRequest(request.getType());
                 }
             }
+        } catch (SocketTimeoutException ex) {
+                if (user != null) sessionManager.remove(user.getSessionCookie());
+            System.out.println("[ClientHandler] Session timeout. Closing connection for " + user.getUsername());
         } catch (IOException ex) {
             System.out.println("[ClientHandler] Connection closed: " + ex.getMessage());
         } finally {
@@ -93,8 +100,10 @@ public class ClientHandler implements Runnable {
             if (valid) {
                 this.user = loginUser;
                 this.isLoggedIn = true;
-                new Request(RequestType.SUCCESS, null).sendRequest(out);
-                System.out.println("[ClientHandler] Login OK: " + loginUser.getUsername());
+                String token = sessionManager.createSession(loginUser);
+                loginUser.setSessionCookie(token);
+                new Request(RequestType.SUCCESS, token).sendRequest(out);
+                System.out.println("[ClientHandler] Login OK: " + loginUser.getUsername() + " (token=" + token + ")");
             } else {
                 new Request(RequestType.ERROR, "Invalid username or password.").sendRequest(out);
             }
@@ -118,7 +127,9 @@ public class ClientHandler implements Runnable {
 
         switch (reg.getResult()) {
             case SUCCESS -> {
-                new Request(RequestType.SUCCESS, null).sendRequest(out);
+                String token = sessionManager.createSession(newUser);
+                newUser.setSessionCookie(token);
+                new Request(RequestType.SUCCESS, token).sendRequest(out);
                 this.user       = newUser;
                 this.isLoggedIn = true;
             }
@@ -207,39 +218,57 @@ public class ClientHandler implements Runnable {
     }
 
     private void reconnect(Object payload) throws IOException {
-        if (!(payload instanceof ClientSession session) || session.getUser() == null) {
-            invalidRequest("RECONNECT payload must be a ClientSession.");
+        // Accept either a session token string OR a ClientSession payload (preferred)
+        String token = null;
+        ClientSession clientSession = null;
+
+        if (payload instanceof String s) token = s;
+        else if (payload instanceof ClientSession cs) {
+            clientSession = cs;
+            if (cs.getUser() != null) token = cs.getUser().getSessionCookie();
+        } else {
+            invalidRequest("RECONNECT payload must be a session token or ClientSession.");
             return;
         }
 
-        User reconnectUser = session.getUser();
-        try {
-            if (!database.validateUser(reconnectUser.getUsername(), reconnectUser.getPassword())) {
-                new Request(RequestType.ERROR, "Invalid username or password.").sendRequest(out);
-                return;
-            }
-        } catch (DatabaseException e) {
-            new Request(RequestType.ERROR, "Server error during reconnect.").sendRequest(out);
+        if (token == null) {
+            invalidRequest("No session token provided for RECONNECT.");
             return;
         }
 
-        this.user = reconnectUser;
+        // Restore session from session manager
+        User stored = sessionManager.getUser(token);
+        if (stored == null) {
+            invalidRequest("Invalid session token. No session found.");
+            return;
+        }
+
+        // Restore session into this handler
+        this.user = new User(stored.getUsername(), stored.getPassword());
+        this.user.setSessionCookie(token);
         this.isLoggedIn = true;
 
-        Room room = session.getRoom();
+        // If client provided a desired room in the ClientSession payload, rejoin it.
+        Room desired = clientSession != null ? clientSession.getRoom() : null;
         this.currentRoom = null;
-        if (room != null) {
-            currentRoom = roomManager.joinRoom(room.getName(), this);
+        if (desired != null) {
+            this.currentRoom = roomManager.joinRoom(desired.getName(), this);
         }
 
-        new Request(RequestType.SUCCESS, currentRoom).sendRequest(out);
-        System.out.println("[ClientHandler] Reconnected: " + reconnectUser.getUsername());
+        new Request(RequestType.SUCCESS, this.currentRoom).sendRequest(out);
+        System.out.println("[ClientHandler] Reconnected session restored for token " + token);
     }
 
     private void logout() {
         if (currentRoom != null)
             roomManager.leaveRoom(currentRoom.getName(), this);
         isLoggedIn  = false;
+        if (user != null) {
+            String token = user.getSessionCookie();
+            if (token != null) {
+                sessionManager.remove(token);
+            }
+        }
         user        = null;
         currentRoom = null;
         System.out.println("[ClientHandler] User logged out.");

@@ -6,6 +6,7 @@ import java.net.*;
 import database.Database;
 import server.common.ClientHandler;
 import server.common.RoomManager;
+import server.common.SessionManager;
 
 public class ChatServer {
 
@@ -17,6 +18,7 @@ public class ChatServer {
         // Shared state — one instance passed to every ClientHandler.
         Database    database    = new Database("database/users.txt");
         RoomManager roomManager = new RoomManager();
+        SessionManager sessionManager = new SessionManager();
 
         try (ServerSocket serverSocket = new ServerSocket(port)) {
 
@@ -25,7 +27,7 @@ public class ChatServer {
             while (true) {
                 Socket socket = serverSocket.accept();
 
-                ClientHandler handler = new ClientHandler(socket, database, roomManager);
+                ClientHandler handler = new ClientHandler(socket, database, roomManager, sessionManager);
                 Thread.ofVirtual().start(handler);
             }
 

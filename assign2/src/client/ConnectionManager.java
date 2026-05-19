@@ -128,22 +128,67 @@ public class ConnectionManager {
             openSocket();
 
             User user = sessionUser;
+            Room room = sessionRoom;
             if (user != null) {
-                Request reconnectRequest = new Request(
-                    RequestType.RECONNECT,
-                    new ClientSession(user, sessionRoom)
-                );
+                boolean restored = false;
+                // Keep retrying until we restore the session or the connection is closed.
+                while (!closed && !restored) {
+                    try {
+                        // Try server-side session restore first
+                        Request reconnectRequest = new Request(
+                            RequestType.RECONNECT,
+                            new ClientSession(user, room)
+                        );
+                        reconnectRequest.sendRequest(out);
+                        Request response = Request.getRequest(in);
+                        if (response.getType() == RequestType.SUCCESS) {
+                            if (response.getPayload() instanceof Room restoredRoom) {
+                                sessionRoom = restoredRoom;
+                            }
+                            restored = true;
+                            break;
+                        }
 
-                reconnectRequest.sendRequest(out);
-                Request response = Request.getRequest(in);
-                if (response.getType() != RequestType.SUCCESS) {
-                    throw new IOException("Reconnect rejected: " + response.getPayload());
+                        // RECONNECT was rejected (or not supported) — fall back to login
+                        Request loginReq = new Request(RequestType.LOGIN, user);
+                        loginReq.sendRequest(out);
+                        Request loginResp = Request.getRequest(in);
+                        if (loginResp.getType() == RequestType.SUCCESS) {
+                            // If we had a room, try to re-enter it.
+                            if (room != null) {
+                                Request enterReq = new Request(RequestType.ENTER_ROOM, room);
+                                enterReq.sendRequest(out);
+                                Request enterResp = Request.getRequest(in);
+                                if (enterResp.getType() == RequestType.SUCCESS
+                                        && enterResp.getPayload() instanceof Room joined) {
+                                    sessionRoom = joined;
+                                }
+                            }
+                            restored = true;
+                            break;
+                        }
+
+                    } catch (IOException e) {
+                        // transient failure — try again after a short pause
+                    }
+
+                    // Reopen socket and retry after a short backoff
+                    try {
+                        closeCurrentSocket();
+                        openSocket();
+                    } catch (IOException ignored) {}
+
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("Reconnect interrupted", ie);
+                    }
                 }
 
-                if (response.getPayload() instanceof Room restoredRoom) {
-                    sessionRoom = restoredRoom;
-                }
+                if (!restored) throw new IOException("Unable to restore session");
             }
+            
         } finally {
             synchronized (reconnectLock) {
                 reconnecting = false;
