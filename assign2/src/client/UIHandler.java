@@ -35,6 +35,8 @@ public class UIHandler {
     private final ConnectionManager      connection;
     private final BufferedReader         input;
     private final BlockingQueue<Request> inbox = new LinkedBlockingQueue<>();
+    // Messages typed while disconnected are queued here and flushed after reconnect
+    private final BlockingQueue<String> pendingMessages = new LinkedBlockingQueue<>();
 
     private User loggedInUser = null;
     private Room currentRoom  = null;
@@ -42,6 +44,38 @@ public class UIHandler {
     public UIHandler(ConnectionManager connection) {
         this.connection = connection;
         this.input      = new BufferedReader(new InputStreamReader(System.in));
+    }
+
+    private void startPendingSender() {
+        Thread.ofVirtual().start(() -> {
+            try {
+                while (!connection.isClosed()) {
+                    String msg = pendingMessages.take();
+
+                    // Wait until reconnect finishes before attempting send
+                    while (connection.isReconnecting()) {
+                        if (connection.isClosed()) return;
+                        try {
+                            Thread.sleep(500);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+
+                    try {
+                        connection.send(new Request(RequestType.CHAT_MESSAGE,
+                            new Message(loggedInUser, currentRoom, msg)));
+                    } catch (IOException e) {
+                        // Sending failed again — requeue and back off a bit
+                        try { pendingMessages.put(msg); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+                        try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+                    }
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        });
     }
 
     // ------------------------------------------------------------------ //
@@ -52,6 +86,9 @@ public class UIHandler {
         // Start the single background reader immediately.
         // It fills `inbox`; nothing else ever calls connection.receive().
         Thread.ofVirtual().start(this::readLoop);
+
+        // Start background sender that flushes queued messages after reconnect
+        startPendingSender();
 
         printWelcome();
         authLoop();
@@ -309,8 +346,19 @@ public class UIHandler {
 
             if (line.isBlank()) continue;
 
-            connection.send(new Request(RequestType.CHAT_MESSAGE,
-                new Message(loggedInUser, currentRoom, line)));
+            try {
+                connection.send(new Request(RequestType.CHAT_MESSAGE,
+                    new Message(loggedInUser, currentRoom, line)));
+            } catch (IOException e) {
+                // Queue the message to be sent after reconnect and inform the user.
+                try {
+                    pendingMessages.put(line);
+                    System.out.println(YELLOW + "Message queued until connection is restored." + RESET);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    System.out.println(RED + "Failed to queue message." + RESET);
+                }
+            }
         }
     }
 
@@ -372,6 +420,18 @@ public class UIHandler {
     // ------------------------------------------------------------------ //
 
     private String readLine(String prompt) throws IOException {
+        // If we're currently reconnecting, wait until it's finished before prompting.
+        while (connection.isReconnecting()) {
+            System.out.println(YELLOW + "Reconnecting... waiting for connection to be restored." + RESET);
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while waiting for reconnect", ie);
+            }
+            if (connection.isClosed()) throw new IOException("Connection closed");
+        }
+
         System.out.print(BOLD + prompt + RESET + ": ");
         return input.readLine();
     }
@@ -382,6 +442,7 @@ public class UIHandler {
             char[] pwd = console.readPassword(BOLD + prompt + RESET + ": ");
             return pwd != null ? new String(pwd) : "";
         }
+        // Ensure we don't prompt while reconnecting
         return readLine(prompt);
     }
 

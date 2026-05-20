@@ -83,6 +83,10 @@ public class ConnectionManager {
         }
     }
 
+    public boolean isReconnecting() {
+        return reconnecting;
+    }
+
     // Raw stream access (used by Auth, RoomSelector, ChatRoom)
 
     public ObjectInputStream getInputStream() {
