@@ -78,6 +78,38 @@ public class UIHandler {
         });
     }
 
+    /**
+     * Send a request but don't fail the app if the connection is temporarily
+     * unavailable — wait for reconnection and retry until success or closed.
+     */
+    private void safeSend(Request req) throws IOException {
+        boolean retried = false;
+        while (true) {
+            try {
+                connection.send(req);
+                return;
+            } catch (IOException e) {
+                if (!retried) {
+                    System.out.println(YELLOW + "Connection problem while sending request. Waiting to reconnect..." + RESET);
+                    retried = true;
+                }
+                
+                // Wait for any in-flight reconnect attempts to complete.
+                while (connection.isReconnecting()) {
+                    if (connection.isClosed()) throw new IOException("Connection closed");
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("Interrupted while waiting for reconnect", ie);
+                    }
+                }
+                if (connection.isClosed()) throw new IOException("Connection closed");
+                // Loop and try again — ConnectionManager.send will attempt reconnects.
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ //
     //  Entry point
     // ------------------------------------------------------------------ //
@@ -221,7 +253,19 @@ public class UIHandler {
     @SuppressWarnings("unchecked")
     private void roomLoop() throws IOException {
         while (currentRoom == null) {
-            connection.send(new Request(RequestType.LIST_ROOMS, null));
+            try {
+                connection.send(new Request(RequestType.LIST_ROOMS, null));
+            } catch (IOException e) {
+                printError("Could not fetch room list: " + e.getMessage());
+                // Allow the user to retry or type a room name even while disconnected.
+                try {
+                    Thread.sleep(250);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while waiting to retry", ie);
+                }
+                continue;
+            }
 
             // Drain any stale chat messages that arrived before our response.
             Request response = drainUntil(RequestType.ROOMS_LIST);
@@ -249,7 +293,11 @@ public class UIHandler {
                 if (index >= 0 && index < rooms.size()) { joinRoom(rooms.get(index)); continue; }
             } catch (NumberFormatException ignored) {}
 
-            if (!choice.isBlank()) joinRoom(new Room(choice));
+            if (!choice.isBlank()) try {
+                joinRoom(new Room(choice));
+            } catch (IOException e) {
+                printError("Could not join room: " + e.getMessage());
+            }
             else printError("Please enter a number from the list or a room name.");
         }
     }
@@ -260,7 +308,24 @@ public class UIHandler {
      */
     private Request drainUntil(RequestType expected) throws IOException {
         while (true) {
-            Request req = nextResponse();
+            Request req;
+            try {
+                // Poll with a timeout so we can detect reconnects and avoid
+                // blocking the UI indefinitely when the server is unreachable.
+                req = inbox.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while waiting for server response", ie);
+            }
+
+            if (req == null) {
+                // No response yet — if we're reconnecting, return null to let
+                // the caller decide how to proceed instead of blocking forever.
+                if (connection.isReconnecting()) return null;
+                if (connection.isClosed()) throw new IOException("Connection closed");
+                continue;
+            }
+
             if (req.getType() == expected) return req;
 
             // A chat message snuck in — print it so it isn't lost.
@@ -291,9 +356,9 @@ public class UIHandler {
     }
 
     private void joinRoom(Room room) throws IOException {
-        connection.send(new Request(RequestType.ENTER_ROOM, room));
+        safeSend(new Request(RequestType.ENTER_ROOM, room));
         Request response = drainUntil(RequestType.SUCCESS);
-        if (response.getType() == RequestType.SUCCESS) {
+        if (response != null && response.getType() == RequestType.SUCCESS) {
             currentRoom = (Room) response.getPayload();
             connection.updateSession(loggedInUser, currentRoom);
             System.out.println(GREEN + "\nJoined room: #" + currentRoom.getName() + RESET);
@@ -303,9 +368,9 @@ public class UIHandler {
     }
 
     private void leaveRoom() throws IOException {
-        connection.send(new Request(RequestType.LEAVE_ROOM, null));
+        safeSend(new Request(RequestType.LEAVE_ROOM, null));
         Request response = drainUntil(RequestType.SUCCESS);
-        if (response.getType() == RequestType.SUCCESS) {
+        if (response != null && response.getType() == RequestType.SUCCESS) {
             System.out.println(GREEN + "\nLeft room: #" + currentRoom.getName() + RESET);
             currentRoom = null;
             connection.updateSession(loggedInUser, currentRoom);
@@ -336,8 +401,13 @@ public class UIHandler {
             if (line.equalsIgnoreCase("/rooms")) {
                 // Stop the chat drain thread while we do room selection, to avoid interleaving chat messages with the room menu. It will be restarted when we re-enter chatLoop().
                 chatDrainThread.interrupt();
-                leaveRoom();
-                roomLoop();
+                try {
+                    leaveRoom();
+                    roomLoop();
+                } catch (IOException e) {
+                    printError("Room switch failed: " + e.getMessage());
+                }
+
                 printChatHeader();
 
                 chatDrainThread = Thread.ofVirtual().start(this::chatDrainLoop);
