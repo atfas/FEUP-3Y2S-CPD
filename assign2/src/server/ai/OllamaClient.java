@@ -22,6 +22,7 @@ public class OllamaClient {
     private static final String OLLAMA_BASE_URL = "http://localhost:11434";
     private static final String GENERATE_ENDPOINT = "/api/generate";
     private static final Duration TIMEOUT = Duration.ofSeconds(120); // Long timeout for LLM
+    private static final int MAX_TOKENS = 64;
     
     private final HttpClient httpClient;
     
@@ -103,7 +104,13 @@ public class OllamaClient {
         return "{"
             + "\"model\":\"" + escapedModel + "\","
             + "\"prompt\":\"" + escapedPrompt + "\","
-            + "\"stream\":false"
+            + "\"stream\":false,"
+            + "\"keep_alive\":\"10m\","
+            + "\"options\":{"
+            + "\"num_predict\":" + MAX_TOKENS + ","
+            + "\"temperature\":0.2,"
+            + "\"stop\":[\"\\nUser\",\"\\nBot\",\"\\nAssistant\",\"\\nSystem\",\"User:\",\"Bot:\",\"Assistant:\",\"System:\"]"
+            + "}"
             + "}";
     }
     

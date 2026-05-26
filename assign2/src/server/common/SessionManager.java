@@ -31,7 +31,10 @@ public class SessionManager {
 
     /** Return the user associated with a token, or null if none. */
     public User getUser(String token) {
-        return token == null ? null : sessions.get(token);
+        if (token == null) return null;
+        synchronized (sessions) {
+            return sessions.get(token);
+        }
     }
 
     /** Remove a session by token. */

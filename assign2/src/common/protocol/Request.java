@@ -13,6 +13,7 @@ public class Request implements Serializable {
 
     public void sendRequest(ObjectOutputStream out) throws IOException {
         out.writeObject(this);
+        out.flush();
     }
 
     public static Request getRequest(ObjectInputStream in) throws IOException{

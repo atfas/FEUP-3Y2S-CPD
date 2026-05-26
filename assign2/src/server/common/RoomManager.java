@@ -90,14 +90,16 @@ public class RoomManager {
      */
     public void leaveAllRooms(ClientHandler client) {
         synchronized (rooms) {
+            List<String> emptyRooms = new java.util.ArrayList<>();
             rooms.forEach((name, members) -> {
                 if (members.remove(client)) {
                     System.out.println("[RoomManager] " + client + " removed from room: " + name);
                     if (members.isEmpty() && !DEFAULT_ROOMS.contains(name)) {
-                        rooms.remove(name, members);
+                        emptyRooms.add(name);
                     }
                 }
             });
+            emptyRooms.forEach(rooms::remove);
         }
     }
 
@@ -105,10 +107,12 @@ public class RoomManager {
      * @return an unmodifiable snapshot of all currently existing rooms.
      */
     public List<Room> listRooms() {
-        return rooms.keySet().stream()
-                .sorted()
-                .map(Room::new)
-                .collect(Collectors.toUnmodifiableList());
+        synchronized (rooms) {
+            return rooms.keySet().stream()
+                    .sorted()
+                    .map(Room::new)
+                    .collect(Collectors.toUnmodifiableList());
+        }
     }
 
     /**
@@ -116,9 +120,14 @@ public class RoomManager {
      *         or an empty set if the room does not exist.
      */
     public Set<ClientHandler> getMembers(String roomName) {
-        Set<ClientHandler> members = rooms.get(normalise(roomName));
+        Set<ClientHandler> members;
+        synchronized (rooms) {
+            members = rooms.get(normalise(roomName));
+        }
         if (members == null) return Collections.emptySet();
-        return Collections.unmodifiableSet(members);
+        synchronized (members) {
+            return Set.copyOf(members);
+        }
     }
 
     /**

@@ -328,7 +328,7 @@ public class UIHandler {
                 continue;
             }
 
-            if (req.getType() == expected) return req;
+            if (req.getType() == expected || req.getType() == RequestType.ERROR) return req;
 
             // A chat message snuck in — print it so it isn't lost.
             if (req.getType() == RequestType.CHAT_MESSAGE
@@ -537,15 +537,27 @@ public class UIHandler {
                 return;
             }
             
-            List<Object> rooms = (List<Object>) response.getPayload();
+            List<common.models.AIRoom> rooms = (List<common.models.AIRoom>) response.getPayload();
             System.out.println(GREEN + "\n═══ AI Rooms ════" + RESET);
             if (rooms.isEmpty()) {
                 System.out.println(YELLOW + "No AI rooms available. Use /ai to create one." + RESET);
             } else {
                 for (int i = 0; i < rooms.size(); i++) {
-                    Object room = rooms.get(i);
-                    if (room instanceof common.models.AIRoom aiRoom) {
-                        System.out.println(GREEN + String.format("  %d) %s (model: %s)", i + 1, aiRoom.getName(), aiRoom.getModel()) + RESET);
+                    common.models.AIRoom aiRoom = rooms.get(i);
+                    System.out.println(GREEN + String.format("  %d) %s (model: %s)", i + 1, aiRoom.getName(), aiRoom.getModel()) + RESET);
+                }
+
+                String choice = readLine("AI room number to enter (blank to return)").trim();
+                if (!choice.isBlank()) {
+                    try {
+                        int index = Integer.parseInt(choice) - 1;
+                        if (index >= 0 && index < rooms.size()) {
+                            enterAIRoom(rooms.get(index));
+                        } else {
+                            printError("Invalid AI room number.");
+                        }
+                    } catch (NumberFormatException ignored) {
+                        printError("Please enter a room number.");
                     }
                 }
             }
@@ -580,7 +592,7 @@ public class UIHandler {
             
             Request response = drainUntil(RequestType.SUCCESS);
             if (response == null || response.getType() != RequestType.SUCCESS) {
-                printError("Failed to create AI room.");
+                printError("Failed to create AI room: " + (response != null ? response.getPayload() : "no response"));
                 return;
             }
             

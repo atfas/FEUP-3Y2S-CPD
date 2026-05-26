@@ -20,6 +20,7 @@ public class ClientHandler implements Runnable {
     private Socket             socket;
     private ObjectOutputStream out;
     private ObjectInputStream  in;
+    private final Object       sendLock = new Object();
     private final Database           database;
     private final RoomManager        roomManager;
     private final SessionManager     sessionManager;
@@ -115,13 +116,13 @@ public class ClientHandler implements Runnable {
                 this.isLoggedIn = true;
                 String token = sessionManager.createSession(loginUser);
                 loginUser.setSessionCookie(token);
-                new Request(RequestType.SUCCESS, token).sendRequest(out);
+                send(new Request(RequestType.SUCCESS, token));
                 System.out.println("[ClientHandler] Login OK: " + loginUser.getUsername() + " (token=" + token + ")");
             } else {
-                new Request(RequestType.ERROR, "Invalid username or password.").sendRequest(out);
+                send(new Request(RequestType.ERROR, "Invalid username or password."));
             }
         } catch (DatabaseException e) {
-            new Request(RequestType.ERROR, "Server error during login.").sendRequest(out);
+            send(new Request(RequestType.ERROR, "Server error during login."));
         }
     }
 
@@ -142,16 +143,16 @@ public class ClientHandler implements Runnable {
             case SUCCESS -> {
                 String token = sessionManager.createSession(newUser);
                 newUser.setSessionCookie(token);
-                new Request(RequestType.SUCCESS, token).sendRequest(out);
+                send(new Request(RequestType.SUCCESS, token));
                 this.user       = newUser;
                 this.isLoggedIn = true;
             }
             case USER_ALREADY_EXISTS ->
-                new Request(RequestType.ERROR, "Username already taken.").sendRequest(out);
+                send(new Request(RequestType.ERROR, "Username already taken."));
             case INVALID_INPUT ->
-                new Request(RequestType.ERROR, "Invalid username or password.").sendRequest(out);
+                send(new Request(RequestType.ERROR, "Invalid username or password."));
             case DATABASE_ERROR ->
-                new Request(RequestType.ERROR, "Server error during registration.").sendRequest(out);
+                send(new Request(RequestType.ERROR, "Server error during registration."));
         }
     }
 
@@ -174,6 +175,25 @@ public class ClientHandler implements Runnable {
         // Check if this is an AI room
         AIRoom aiRoom = aiRoomManager.getAIRoom(currentRoom.getName());
 
+        if (aiRoom != null) {
+            String roomName = currentRoom.getName();
+            String userName = user.getUsername();
+            String content = message.getContent();
+            Room responseRoom = currentRoom;
+
+            broadcastToRoom(roomName, stamped, true);
+
+            Thread.ofVirtual().start(() -> {
+                System.out.println("[ClientHandler] Processing AI room message in background");
+                String botResponse = aiRoomManager.processMessage(roomName, userName, content);
+                User bot = new User("Bot", "");
+                Message botMessage = new Message(bot, responseRoom, botResponse);
+                broadcastToRoom(roomName, botMessage, false);
+                System.out.println("[ClientHandler] AI response sent in room: " + roomName);
+            });
+            return;
+        }
+
         System.out.println("[ClientHandler] Checking AI room: " + currentRoom.getName() 
             + ", isAIRoom=" + (aiRoom != null));
 
@@ -195,7 +215,7 @@ public class ClientHandler implements Runnable {
             
             for (ClientHandler member : roomManager.getMembers(currentRoom.getName())) {
                 try { 
-                    new Request(RequestType.CHAT_MESSAGE, stamped).sendRequest(member.out);
+                    member.send(new Request(RequestType.CHAT_MESSAGE, stamped));
                 } catch (IOException ignored) {}
             }
 
@@ -206,7 +226,7 @@ public class ClientHandler implements Runnable {
             Message botMessage = new Message(bot, currentRoom, botResponse);
             for (ClientHandler member : roomManager.getMembers(currentRoom.getName())) {
                 try { 
-                    new Request(RequestType.CHAT_MESSAGE, botMessage).sendRequest(member.out);
+                    member.send(new Request(RequestType.CHAT_MESSAGE, botMessage));
                 } catch (IOException ignored) {}
             }
 
@@ -215,7 +235,7 @@ public class ClientHandler implements Runnable {
             // Regular room — broadcast to everyone
             for (ClientHandler member : roomManager.getMembers(currentRoom.getName())) {
                 if (member != this) {
-                    new Request(RequestType.CHAT_MESSAGE, stamped).sendRequest(member.out);
+                    member.send(new Request(RequestType.CHAT_MESSAGE, stamped));
                 }
             }
         }
@@ -237,7 +257,7 @@ public class ClientHandler implements Runnable {
         broadcastSystemTo(roomKey, user.getUsername() + " joined the room.");
 
         currentRoom = roomManager.joinRoom(roomKey, this);
-        new Request(RequestType.SUCCESS, currentRoom).sendRequest(out);
+        send(new Request(RequestType.SUCCESS, currentRoom));
     }
 
     private void leaveRoom() throws IOException {
@@ -246,7 +266,7 @@ public class ClientHandler implements Runnable {
             broadcastSystem(currentRoom, user.getUsername() + " left the room.");
             currentRoom = null;
         }
-        new Request(RequestType.SUCCESS, null).sendRequest(out);
+        send(new Request(RequestType.SUCCESS, null));
     }
 
     /** Broadcasts a system notification to all members of a room (by Room object). */
@@ -255,7 +275,7 @@ public class ClientHandler implements Runnable {
         Request req = new Request(RequestType.CHAT_MESSAGE, msg);
         for (ClientHandler member : roomManager.getMembers(room.getName())) {
             if (member != this) {
-                try { req.sendRequest(member.out); } catch (IOException ignored) {}
+                try { member.send(req); } catch (IOException ignored) {}
             }
         }
     }
@@ -266,13 +286,27 @@ public class ClientHandler implements Runnable {
         Message msg = new Message(null, room, text);
         Request req = new Request(RequestType.CHAT_MESSAGE, msg);
         for (ClientHandler member : roomManager.getMembers(roomName)) {
-            try { req.sendRequest(member.out); } catch (IOException ignored) {}
+            try { member.send(req); } catch (IOException ignored) {}
+        }
+    }
+
+    private void broadcastToRoom(String roomName, Message message, boolean skipSelf) {
+        Request req = new Request(RequestType.CHAT_MESSAGE, message);
+        for (ClientHandler member : roomManager.getMembers(roomName)) {
+            if (skipSelf && member == this) continue;
+            try { member.send(req); } catch (IOException ignored) {}
+        }
+    }
+
+    private void send(Request request) throws IOException {
+        synchronized (sendLock) {
+            request.sendRequest(out);
         }
     }
 
     private void listRooms() throws IOException {
         List<Room> rooms = roomManager.listRooms();
-        new Request(RequestType.ROOMS_LIST, (java.io.Serializable) rooms).sendRequest(out);
+        send(new Request(RequestType.ROOMS_LIST, (java.io.Serializable) rooms));
     }
 
     /**
@@ -291,10 +325,10 @@ public class ClientHandler implements Runnable {
                 desiredRoom.getSystemPrompt(),
                 desiredRoom.getModel()
             );
-            new Request(RequestType.SUCCESS, created).sendRequest(out);
+            send(new Request(RequestType.SUCCESS, created));
             System.out.println("[ClientHandler] AI room created by " + user.getUsername() + ": " + created.getName());
         } catch (IllegalArgumentException e) {
-            new Request(RequestType.ERROR, e.getMessage()).sendRequest(out);
+            send(new Request(RequestType.ERROR, e.getMessage()));
         }
     }
 
@@ -303,7 +337,7 @@ public class ClientHandler implements Runnable {
      */
     private void listAIRooms() throws IOException {
         List<AIRoom> aiRooms = aiRoomManager.listAIRooms();
-        new Request(RequestType.ROOMS_LIST, (java.io.Serializable) aiRooms).sendRequest(out);
+        send(new Request(RequestType.ROOMS_LIST, (java.io.Serializable) aiRooms));
     }
 
     /**
@@ -332,7 +366,7 @@ public class ClientHandler implements Runnable {
 
         // Join the AI room (also add to regular room tracking for broadcast purposes)
         currentRoom = roomManager.joinRoom(roomKey, this);
-        new Request(RequestType.SUCCESS, room).sendRequest(out);
+        send(new Request(RequestType.SUCCESS, room));
 
         System.out.println("[ClientHandler] " + user.getUsername() + " entered AI room: " + roomKey);
     }
@@ -375,7 +409,7 @@ public class ClientHandler implements Runnable {
             this.currentRoom = roomManager.joinRoom(desired.getName(), this);
         }
 
-        new Request(RequestType.SUCCESS, this.currentRoom).sendRequest(out);
+        send(new Request(RequestType.SUCCESS, this.currentRoom));
         System.out.println("[ClientHandler] Reconnected session restored for token " + token);
     }
 
@@ -399,12 +433,11 @@ public class ClientHandler implements Runnable {
     // ------------------------------------------------------------------ //
 
     private void notImplementedRequest(RequestType type) throws IOException {
-        new Request(RequestType.ERROR, "Request type " + type.name() + " not implemented.")
-            .sendRequest(out);
+        send(new Request(RequestType.ERROR, "Request type " + type.name() + " not implemented."));
     }
 
     private void invalidRequest(Object reason) throws IOException {
-        new Request(RequestType.ERROR, "Invalid request: " + reason).sendRequest(out);
+        send(new Request(RequestType.ERROR, "Invalid request: " + reason));
     }
 
     @Override
