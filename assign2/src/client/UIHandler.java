@@ -287,6 +287,8 @@ public class UIHandler {
             }
 
             if (choice.equalsIgnoreCase("/refresh")) continue;
+            if (choice.equalsIgnoreCase("/ai")) { createAIRoom(); continue; }
+            if (choice.equalsIgnoreCase("/ailist")) { listAIRooms(); continue; }
 
             try {
                 int index = Integer.parseInt(choice) - 1;
@@ -351,7 +353,7 @@ public class UIHandler {
         System.out.println(CYAN + BOLD + "│   0) Exit                             │" + RESET);
         System.out.println(CYAN + BOLD + "└───────────────────────────────────────┘" + RESET);
         System.out.println(YELLOW + "  Enter a number to join, or type a new room name to create it." + RESET);
-        System.out.println(YELLOW + "  Use '/refresh' to update the room list." + RESET);
+        System.out.println(YELLOW + "  Commands: /refresh, /ai (create), /ailist (list AI rooms)" + RESET);
         System.out.println();
     }
 
@@ -518,5 +520,94 @@ public class UIHandler {
 
     private void printError(String message) {
         System.out.println(RED + "\n" + message + RESET + "\n");
+    }
+
+    // ------------------------------------------------------------------ //
+    //  AI Rooms
+    // ------------------------------------------------------------------ //
+
+    @SuppressWarnings("unchecked")
+    private void listAIRooms() throws IOException {
+        try {
+            connection.send(new Request(RequestType.LIST_AI_ROOMS, null));
+            Request response = drainUntil(RequestType.ROOMS_LIST);
+            
+            if (response == null || response.getType() != RequestType.ROOMS_LIST) {
+                printError("Could not fetch AI room list.");
+                return;
+            }
+            
+            List<Object> rooms = (List<Object>) response.getPayload();
+            System.out.println(GREEN + "\n═══ AI Rooms ════" + RESET);
+            if (rooms.isEmpty()) {
+                System.out.println(YELLOW + "No AI rooms available. Use /ai to create one." + RESET);
+            } else {
+                for (int i = 0; i < rooms.size(); i++) {
+                    Object room = rooms.get(i);
+                    if (room instanceof common.models.AIRoom aiRoom) {
+                        System.out.println(GREEN + String.format("  %d) %s (model: %s)", i + 1, aiRoom.getName(), aiRoom.getModel()) + RESET);
+                    }
+                }
+            }
+            System.out.println();
+        } catch (IOException e) {
+            printError("Could not fetch AI room list: " + e.getMessage());
+        }
+    }
+
+    private void createAIRoom() throws IOException {
+        String roomName = readLine("AI Room name").trim();
+        if (roomName.isBlank()) {
+            printError("Room name cannot be empty.");
+            return;
+        }
+        
+        String systemPrompt = readLine("System prompt (guides AI behavior)").trim();
+        if (systemPrompt.isBlank()) {
+            printError("System prompt cannot be empty.");
+            return;
+        }
+        
+        String model = readLine("Model (e.g., llama3 or neural-chat)").trim();
+        if (model.isBlank()) {
+            model = "llama3";
+            System.out.println(YELLOW + "Using default model: llama3" + RESET);
+        }
+        
+        try {
+            common.models.AIRoom aiRoom = new common.models.AIRoom(roomName, systemPrompt, model);
+            connection.send(new Request(RequestType.CREATE_AI_ROOM, aiRoom));
+            
+            Request response = drainUntil(RequestType.SUCCESS);
+            if (response == null || response.getType() != RequestType.SUCCESS) {
+                printError("Failed to create AI room.");
+                return;
+            }
+            
+            System.out.println(GREEN + "\n✓ AI Room created: " + roomName + RESET + "\n");
+            enterAIRoom(aiRoom);
+        } catch (IOException e) {
+            printError("Could not create AI room: " + e.getMessage());
+        }
+    }
+
+    private void enterAIRoom(common.models.AIRoom room) throws IOException {
+        try {
+            connection.send(new Request(RequestType.ENTER_AI_ROOM, room));
+            Request response = drainUntil(RequestType.SUCCESS);
+            
+            if (response == null || response.getType() != RequestType.SUCCESS) {
+                printError("Failed to enter AI room.");
+                return;
+            }
+            
+            currentRoom = room;
+            connection.updateSession(loggedInUser, currentRoom);
+            System.out.println(GREEN + BOLD + "\n═══ Entered AI Room: " + room.getName() + " ═══" + RESET);
+            System.out.println(CYAN + "System: " + room.getSystemPrompt() + RESET);
+            System.out.println(CYAN + "Model: " + room.getModel() + RESET + "\n");
+        } catch (IOException e) {
+            printError("Could not enter AI room: " + e.getMessage());
+        }
     }
 }

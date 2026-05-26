@@ -4,6 +4,7 @@ import java.io.*;
 import java.net.*;
 
 import database.Database;
+import server.ai.AIRoomManager;
 import server.common.ClientHandler;
 import server.common.RoomManager;
 import server.common.SessionManager;
@@ -19,6 +20,7 @@ public class ChatServer {
         Database    database    = new Database("database/users.txt");
         RoomManager roomManager = new RoomManager();
         SessionManager sessionManager = new SessionManager();
+        AIRoomManager aiRoomManager = new AIRoomManager();
 
         try (ServerSocket serverSocket = new ServerSocket(port)) {
 
@@ -27,7 +29,7 @@ public class ChatServer {
             while (true) {
                 Socket socket = serverSocket.accept();
 
-                ClientHandler handler = new ClientHandler(socket, database, roomManager, sessionManager);
+                ClientHandler handler = new ClientHandler(socket, database, roomManager, sessionManager, aiRoomManager);
                 Thread.ofVirtual().start(handler);
             }
 

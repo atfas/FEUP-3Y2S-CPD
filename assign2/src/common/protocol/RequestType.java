@@ -13,4 +13,7 @@ public enum RequestType {
     LIST_ROOMS,
     SUCCESS,
     ROOMS_LIST,
+    CREATE_AI_ROOM,
+    LIST_AI_ROOMS,
+    ENTER_AI_ROOM,
 }

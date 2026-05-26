@@ -4,6 +4,7 @@ import java.io.*;
 import java.net.*;
 import java.util.List;
 
+import common.models.AIRoom;
 import common.models.Message;
 import common.models.ClientSession;
 import common.models.Room;
@@ -12,6 +13,7 @@ import common.protocol.Request;
 import common.protocol.RequestType;
 import database.Database;
 import database.Database.DatabaseException;
+import server.ai.AIRoomManager;
 import server.auth.Registration;
 
 public class ClientHandler implements Runnable {
@@ -21,16 +23,18 @@ public class ClientHandler implements Runnable {
     private final Database           database;
     private final RoomManager        roomManager;
     private final SessionManager     sessionManager;
+    private final AIRoomManager      aiRoomManager;
 
     private User    user;
     private Room    currentRoom;
     private boolean isLoggedIn;
 
-    public ClientHandler(Socket socket, Database database, RoomManager roomManager, SessionManager sessionManager) throws IOException {
+    public ClientHandler(Socket socket, Database database, RoomManager roomManager, SessionManager sessionManager, AIRoomManager aiRoomManager) throws IOException {
         this.socket      = socket;
         this.database    = database;
         this.roomManager = roomManager;
         this.sessionManager = sessionManager;
+        this.aiRoomManager = aiRoomManager;
         this.user        = null;
         this.currentRoom = null;
         this.isLoggedIn  = false;
@@ -67,6 +71,15 @@ public class ClientHandler implements Runnable {
                         if (!isLoggedIn) invalidRequest("Must be logged in to join a room.");
                         else             enterRoom(request.getPayload());
                     }
+                    case ENTER_AI_ROOM -> {
+                        if (!isLoggedIn) invalidRequest("Must be logged in to join an AI room.");
+                        else             enterAIRoom(request.getPayload());
+                    }
+                    case CREATE_AI_ROOM -> {
+                        if (!isLoggedIn) invalidRequest("Must be logged in to create AI rooms.");
+                        else             createAIRoom(request.getPayload());
+                    }
+                    case LIST_AI_ROOMS -> listAIRooms();
                     case LEAVE_ROOM   -> leaveRoom();
                     case LIST_ROOMS   -> listRooms();
                     case LOGOUT       -> logout();
@@ -152,13 +165,58 @@ public class ClientHandler implements Runnable {
             return;
         }
 
+        System.out.println("[ClientHandler] sendMessage called: room=" + currentRoom.getName() 
+            + ", user=" + user.getUsername() + ", message=" + message.getContent());
+
         // Re-stamp the sender so clients can't spoof it.
         Message stamped = new Message(user, currentRoom, message.getContent());
 
-        // Broadcast to everyone in the room.
-        for (ClientHandler member : roomManager.getMembers(currentRoom.getName())) {
-            if (member != this) {
-                new Request(RequestType.CHAT_MESSAGE, stamped).sendRequest(member.out);
+        // Check if this is an AI room
+        AIRoom aiRoom = aiRoomManager.getAIRoom(currentRoom.getName());
+
+        System.out.println("[ClientHandler] Checking AI room: " + currentRoom.getName() 
+            + ", isAIRoom=" + (aiRoom != null));
+
+        if (aiRoom != null) {
+            // This is an AI room — get bot response
+            System.out.println("[ClientHandler] Processing AI room message");
+            
+            String botResponse = aiRoomManager.processMessage(
+                currentRoom.getName(),
+                user.getUsername(),
+                message.getContent()
+            );
+
+            System.out.println("[ClientHandler] Got bot response: [" + botResponse + "]");
+
+            // Send user message to all members
+            System.out.println("[ClientHandler] Broadcasting user message to " 
+                + roomManager.getMembers(currentRoom.getName()).size() + " members");
+            
+            for (ClientHandler member : roomManager.getMembers(currentRoom.getName())) {
+                try { 
+                    new Request(RequestType.CHAT_MESSAGE, stamped).sendRequest(member.out);
+                } catch (IOException ignored) {}
+            }
+
+            // Send bot response from "Bot" user
+            System.out.println("[ClientHandler] Broadcasting bot response to members");
+            
+            User bot = new User("Bot", "");
+            Message botMessage = new Message(bot, currentRoom, botResponse);
+            for (ClientHandler member : roomManager.getMembers(currentRoom.getName())) {
+                try { 
+                    new Request(RequestType.CHAT_MESSAGE, botMessage).sendRequest(member.out);
+                } catch (IOException ignored) {}
+            }
+
+            System.out.println("[ClientHandler] AI response sent in room: " + currentRoom.getName());
+        } else {
+            // Regular room — broadcast to everyone
+            for (ClientHandler member : roomManager.getMembers(currentRoom.getName())) {
+                if (member != this) {
+                    new Request(RequestType.CHAT_MESSAGE, stamped).sendRequest(member.out);
+                }
             }
         }
     }
@@ -215,6 +273,68 @@ public class ClientHandler implements Runnable {
     private void listRooms() throws IOException {
         List<Room> rooms = roomManager.listRooms();
         new Request(RequestType.ROOMS_LIST, (java.io.Serializable) rooms).sendRequest(out);
+    }
+
+    /**
+     * Create a new AI room.
+     * Payload should be an AIRoom object.
+     */
+    private void createAIRoom(Object payload) throws IOException {
+        if (!(payload instanceof AIRoom desiredRoom)) {
+            invalidRequest("CREATE_AI_ROOM payload must be an AIRoom.");
+            return;
+        }
+
+        try {
+            AIRoom created = aiRoomManager.createAIRoom(
+                desiredRoom.getName(),
+                desiredRoom.getSystemPrompt(),
+                desiredRoom.getModel()
+            );
+            new Request(RequestType.SUCCESS, created).sendRequest(out);
+            System.out.println("[ClientHandler] AI room created by " + user.getUsername() + ": " + created.getName());
+        } catch (IllegalArgumentException e) {
+            new Request(RequestType.ERROR, e.getMessage()).sendRequest(out);
+        }
+    }
+
+    /**
+     * List all available AI rooms.
+     */
+    private void listAIRooms() throws IOException {
+        List<AIRoom> aiRooms = aiRoomManager.listAIRooms();
+        new Request(RequestType.ROOMS_LIST, (java.io.Serializable) aiRooms).sendRequest(out);
+    }
+
+    /**
+     * Enter an AI room.
+     * Payload should be an AIRoom object.
+     */
+    private void enterAIRoom(Object payload) throws IOException {
+        if (!(payload instanceof AIRoom desiredRoom)) {
+            invalidRequest("ENTER_AI_ROOM payload must be an AIRoom.");
+            return;
+        }
+
+        String roomKey = desiredRoom.getName().trim().toLowerCase();
+        AIRoom room = aiRoomManager.getAIRoom(roomKey);
+
+        if (room == null) {
+            invalidRequest("AI room does not exist: " + roomKey);
+            return;
+        }
+
+        // Leave current room if in one
+        if (currentRoom != null) {
+            roomManager.leaveRoom(currentRoom.getName(), this);
+            broadcastSystem(currentRoom, user.getUsername() + " left the room.");
+        }
+
+        // Join the AI room (also add to regular room tracking for broadcast purposes)
+        currentRoom = roomManager.joinRoom(roomKey, this);
+        new Request(RequestType.SUCCESS, room).sendRequest(out);
+
+        System.out.println("[ClientHandler] " + user.getUsername() + " entered AI room: " + roomKey);
     }
 
     private void reconnect(Object payload) throws IOException {
