@@ -8,6 +8,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import common.models.Message;
 import common.models.Room;
 import common.models.User;
+import common.models.AIRoom;
 import common.protocol.Request;
 import common.protocol.RequestType;
 
@@ -425,7 +426,7 @@ public class UIHandler {
                 // Queue the message to be sent after reconnect and inform the user.
                 try {
                     pendingMessages.put(line);
-                    System.out.println(YELLOW + "Message queued until connection is restored." + RESET);
+                    System.out.println(YELLOW + "Message stopped until connection is restored." + RESET);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     System.out.println(RED + "Failed to queue message." + RESET);
