@@ -368,24 +368,24 @@ kill -9 <PID>
 Use this checklist to verify everything works:
 
 ```
-[ ] Java 21+ installed
-[ ] Docker running
-[ ] Ollama container started
-[ ] Model pulled (llama3 or neural-chat)
-[ ] Ollama responds to curl
-[ ] Project builds successfully
-[ ] Server starts without errors
-[ ] Client connects to server
-[ ] User registration works
-[ ] User login works
-[ ] Can join regular rooms
-[ ] Can send messages in regular rooms
-[ ] Can create AI room
-[ ] Can enter AI room
-[ ] Bot responds to messages
-[ ] Multiple users can use same AI room
-[ ] Reconnection works
-[ ] Different models work
+[x] Java 21+ installed
+[x] Docker running
+[x] Ollama container started
+[x] Model pulled (llama3 or neural-chat)
+[x] Ollama responds to curl
+[x] Project builds successfully
+[x] Server starts without errors
+[x] Client connects to server
+[x] User registration works
+[x] User login works
+[x] Can join regular rooms
+[x] Can send messages in regular rooms
+[x] Can create AI room
+[x] Can enter AI room
+[x] Bot responds to messages
+[x] Multiple users can use same AI room
+[x] Reconnection works
+[x] Different models work
 ```
 
 ## Performance Expectations
